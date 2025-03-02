@@ -1,0 +1,669 @@
+import React, { useState, useEffect, useRef } from 'react';
+
+const CatchTheVirusGame = () => {
+  const gameAreaRef = useRef(null);
+  const bloodCellsRef = useRef([]);
+  const requestRef = useRef(null);
+  const [isMobile, setIsMobile] = useState(false);
+  const [gameActive, setGameActive] = useState(true);
+  const [score, setScore] = useState(0);
+  const [virusesKilled, setVirusesKilled] = useState(0);
+  const [baseSpeed, setBaseSpeed] = useState(0.5);
+  const [gameLevel, setGameLevel] = useState(1);
+  const [gameWon, setGameWon] = useState(false);
+  
+  // Blood cells for the background
+  const [bloodCells, setBloodCells] = useState([]);
+  
+  // Updated size factors - increased value for level 3
+  const virusSizeFactor = {
+    level1: 0.875,    // 0.7 * 1.25 = 0.875 (unchanged)
+    level2: 0.75,     // Increased from 0.625 to 0.75 (unchanged)
+    level3: 0.8       // Increased from 0.5 to 0.8 (made larger)
+  };
+  
+  // Use refs for positions to avoid state batching issues
+  const spermPosRef = useRef({ x: 100, y: 100 });
+  const virusesRef = useRef([{ 
+    id: 0,
+    pos: { x: 300, y: 300 },
+    direction: { dx: 1, dy: 1 },
+    size: virusSizeFactor.level1
+  }]);
+  
+  // For rendering UI (not used for game logic)
+  const [spermPos, setSpermPos] = useState({ x: 100, y: 100 });
+  const [viruses, setViruses] = useState([{
+    id: 0,
+    pos: { x: 300, y: 300 },
+    size: virusSizeFactor.level1
+  }]);
+  
+  // Add viewport meta tag for proper mobile scaling
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      // Check if viewport meta tag already exists
+      let meta = document.querySelector('meta[name="viewport"]');
+      if (!meta) {
+        meta = document.createElement('meta');
+        meta.name = 'viewport';
+        meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
+        document.getElementsByTagName('head')[0].appendChild(meta);
+      } else {
+        // Update existing viewport meta
+        meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
+      }
+    }
+  }, []);
+  
+  // Generate initial blood cells
+  const generateBloodCells = (width, height, count = 15) => {
+    const cells = [];
+    for (let i = 0; i < count; i++) {
+      cells.push({
+        id: `cell-${i}`,
+        x: Math.random() * width,
+        y: Math.random() * height,
+        size: Math.random() * 15 + 10,
+        speed: Math.random() * 0.4 + 0.1,
+        direction: { dx: (Math.random() - 0.5) * 0.5, dy: (Math.random() - 0.5) * 0.5 },
+        opacity: Math.random() * 0.3 + 0.2,
+        type: Math.random() > 0.7 ? 'white' : 'red'
+      });
+    }
+    return cells;
+  };
+  
+  // Set up game and detect device type
+  useEffect(() => {
+    setIsMobile(window.matchMedia('(pointer: coarse)').matches);
+    
+    // Initialize with random virus position
+    if (gameAreaRef.current) {
+      const width = gameAreaRef.current.clientWidth;
+      const height = gameAreaRef.current.clientHeight;
+      
+      const initialVirus = {
+        id: 0,
+        pos: {
+          x: Math.random() * (width - 40) + 20,
+          y: Math.random() * (height - 40) + 20
+        },
+        direction: { dx: 1, dy: 1 },
+        size: virusSizeFactor.level1
+      };
+      
+      virusesRef.current = [initialVirus];
+      setViruses([{
+        id: initialVirus.id,
+        pos: initialVirus.pos,
+        size: virusSizeFactor.level1
+      }]);
+      
+      // Initialize blood cells
+      const initialBloodCells = generateBloodCells(width, height);
+      bloodCellsRef.current = initialBloodCells;
+      setBloodCells(initialBloodCells);
+    }
+    
+    return () => {
+      if (requestRef.current) {
+        cancelAnimationFrame(requestRef.current);
+      }
+    };
+  }, []);
+  
+  // Set up input handlers
+  useEffect(() => {
+    const handleMouseMove = (e) => {
+      if (gameAreaRef.current && gameActive) {
+        const rect = gameAreaRef.current.getBoundingClientRect();
+        const newPos = {
+          x: e.clientX - rect.left,
+          y: e.clientY - rect.top
+        };
+        spermPosRef.current = newPos;
+        setSpermPos(newPos);
+      }
+    };
+    
+    const handleTouchMove = (e) => {
+      if (gameAreaRef.current && gameActive && e.touches && e.touches[0]) {
+        e.preventDefault(); // Prevent scrolling while playing
+        const rect = gameAreaRef.current.getBoundingClientRect();
+        const newPos = {
+          x: e.touches[0].clientX - rect.left,
+          y: e.touches[0].clientY - rect.top
+        };
+        spermPosRef.current = newPos;
+        setSpermPos(newPos);
+      }
+    };
+
+    if (gameAreaRef.current) {
+      gameAreaRef.current.addEventListener('mousemove', handleMouseMove);
+      gameAreaRef.current.addEventListener('touchmove', handleTouchMove, { passive: false });
+      gameAreaRef.current.addEventListener('touchstart', handleTouchMove, { passive: false });
+    }
+
+    return () => {
+      if (gameAreaRef.current) {
+        gameAreaRef.current.removeEventListener('mousemove', handleMouseMove);
+        gameAreaRef.current.removeEventListener('touchmove', handleTouchMove);
+        gameAreaRef.current.removeEventListener('touchstart', handleTouchMove);
+      }
+    };
+  }, [gameActive]);
+  
+  // Game loop using requestAnimationFrame
+  useEffect(() => {
+    let lastTime = 0;
+    
+    const gameLoop = (timestamp) => {
+      // Calculate time delta
+      if (!lastTime) lastTime = timestamp;
+      const deltaTime = timestamp - lastTime;
+      lastTime = timestamp;
+      
+      if (!gameActive) {
+        // Still animate bloodcells even when game is over
+        animateBloodCells(deltaTime);
+        requestRef.current = requestAnimationFrame(gameLoop);
+        return;
+      }
+      
+      // Move viruses
+      moveViruses(deltaTime);
+      
+      // Animate blood cells
+      animateBloodCells(deltaTime);
+      
+      // Check collision
+      checkCollision();
+      
+      // Update score
+      setScore(prev => {
+        const newScore = prev + 1;
+        
+        // Check for game over at 2000 points
+        if (newScore >= 2000) {
+          console.log("GAME OVER: Reached 2000 points!");
+          setGameActive(false);
+          setGameWon(true);
+          return 2000; // Cap the score at 2000
+        }
+        
+        // Check for level changes
+        if (newScore === 500 && prev < 500) {
+          setGameLevel(2);
+          updateVirusesSizes(virusSizeFactor.level2); // Level 2 size
+        } else if (newScore === 1000 && prev < 1000) {
+          setGameLevel(3);
+          updateVirusesSizes(virusSizeFactor.level3); // Level 3 size
+        }
+        
+        // Add new virus every 200 points
+        if (Math.floor(newScore / 200) > Math.floor(prev / 200)) {
+          addNewVirus();
+          
+          // Increase speed every 200 points (up to a limit)
+          if (baseSpeed < 1.5) {
+            setBaseSpeed(prevSpeed => prevSpeed + 0.1);
+          }
+        }
+        
+        return newScore;
+      });
+      
+      // Continue game loop
+      requestRef.current = requestAnimationFrame(gameLoop);
+    };
+    
+    // Start game loop
+    requestRef.current = requestAnimationFrame(gameLoop);
+    
+    return () => {
+      if (requestRef.current) {
+        cancelAnimationFrame(requestRef.current);
+      }
+    };
+  }, [gameActive]);
+  
+  // Animate blood cells
+  const animateBloodCells = (deltaTime) => {
+    if (!gameAreaRef.current) return;
+    
+    const width = gameAreaRef.current.clientWidth;
+    const height = gameAreaRef.current.clientHeight;
+    
+    const updatedCells = bloodCellsRef.current.map(cell => {
+      // Update position based on direction and speed
+      let newX = cell.x + cell.direction.dx * cell.speed * deltaTime;
+      let newY = cell.y + cell.direction.dy * cell.speed * deltaTime;
+      
+      // Wrap around edges
+      if (newX < -20) newX = width + 20;
+      if (newX > width + 20) newX = -20;
+      if (newY < -20) newY = height + 20;
+      if (newY > height + 20) newY = -20;
+      
+      // Small chance to change direction
+      if (Math.random() < 0.005) {
+        cell.direction = {
+          dx: (Math.random() - 0.5) * 0.5,
+          dy: (Math.random() - 0.5) * 0.5
+        };
+      }
+      
+      return {
+        ...cell,
+        x: newX,
+        y: newY
+      };
+    });
+    
+    bloodCellsRef.current = updatedCells;
+    setBloodCells(updatedCells);
+  };
+  
+  // Update viruses sizes based on level
+  const updateVirusesSizes = (newSize) => {
+    // Change size of all current viruses
+    const updatedViruses = virusesRef.current.map(virus => {
+      return {
+        ...virus,
+        size: newSize
+      };
+    });
+    
+    virusesRef.current = updatedViruses;
+    setViruses(updatedViruses.map(v => ({ id: v.id, pos: v.pos, size: v.size })));
+    
+    console.log(`Level ${gameLevel} activated! Viruses size changed to ${newSize}`);
+  };
+  
+  // Get current virus size based on game level
+  const getCurrentVirusSize = () => {
+    switch (gameLevel) {
+      case 1: return virusSizeFactor.level1;
+      case 2: return virusSizeFactor.level2;
+      case 3: return virusSizeFactor.level3;
+      default: return virusSizeFactor.level1;
+    }
+  };
+  
+  // Add a new virus
+  const addNewVirus = () => {
+    if (!gameAreaRef.current) return;
+    
+    const gameWidth = gameAreaRef.current.clientWidth;
+    const gameHeight = gameAreaRef.current.clientHeight;
+    
+    // Create a new virus at a random position
+    // Try to place it away from the current sperm position
+    const spermPos = spermPosRef.current;
+    let x, y;
+    
+    // Keep trying until we get a position that's not too close to the sperm
+    do {
+      x = Math.random() * (gameWidth - 40) + 20;
+      y = Math.random() * (gameHeight - 40) + 20;
+    } while (
+      Math.sqrt(Math.pow(x - spermPos.x, 2) + Math.pow(y - spermPos.y, 2)) < 100
+    );
+    
+    const newVirus = {
+      id: Date.now(), // Unique ID
+      pos: { x, y },
+      direction: { 
+        dx: (Math.random() - 0.5) * 2,
+        dy: (Math.random() - 0.5) * 2
+      },
+      size: getCurrentVirusSize() // Use appropriate size for current level
+    };
+    
+    // Update refs and state
+    virusesRef.current = [...virusesRef.current, newVirus];
+    setViruses(prev => [...prev, { id: newVirus.id, pos: newVirus.pos, size: newVirus.size }]);
+    
+    console.log(`Added new virus at (${x.toFixed(1)}, ${y.toFixed(1)}). Total: ${virusesRef.current.length}`);
+  };
+  
+  // Move all viruses
+  const moveViruses = (deltaTime) => {
+    if (!gameAreaRef.current) return;
+    
+    const gameWidth = gameAreaRef.current.clientWidth;
+    const gameHeight = gameAreaRef.current.clientHeight;
+    
+    // Move each virus
+    const updatedViruses = virusesRef.current.map(virus => {
+      const { pos, direction } = virus;
+      const { dx, dy } = direction;
+      
+      // Use current direction with occasional changes
+      const speed = baseSpeed * (1 + Math.random() * 0.2); // Add some variation
+      
+      // Small chance to change direction
+      if (Math.random() < 0.01) {
+        direction.dx = (Math.random() - 0.5) * 2;
+        direction.dy = (Math.random() - 0.5) * 2;
+      }
+      
+      // Calculate new position
+      let newX = pos.x + dx * speed * deltaTime;
+      let newY = pos.y + dy * speed * deltaTime;
+      
+      // Bounce off walls
+      if (newX < 20 || newX > gameWidth - 20) {
+        direction.dx = -dx;
+        newX = newX < 20 ? 20 : gameWidth - 20;
+      }
+      
+      if (newY < 20 || newY > gameHeight - 20) {
+        direction.dy = -dy;
+        newY = newY < 20 ? 20 : gameHeight - 20;
+      }
+      
+      // Update position
+      pos.x = newX;
+      pos.y = newY;
+      
+      return { ...virus };
+    });
+    
+    // Update ref and state
+    virusesRef.current = updatedViruses;
+    setViruses(updatedViruses.map(v => ({ id: v.id, pos: v.pos, size: v.size })));
+  };
+  
+  // Collision detection between sperm and any virus
+  const checkCollision = () => {
+    const spermPos = spermPosRef.current;
+    let collision = false;
+    let virusIdToRemove = null;
+    
+    // Check collision with any virus
+    for (const virus of virusesRef.current) {
+      const virusPos = virus.pos;
+      
+      // Calculate distance between centers
+      const dx = spermPos.x - virusPos.x;
+      const dy = spermPos.y - virusPos.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      
+      // Combined radius: sperm (6px) + virus (10px * size) 
+      // Adjust collision threshold based on virus size
+      const virusRadius = 10 * virus.size;
+      const collisionThreshold = 6 + virusRadius;
+      
+      if (distance < collisionThreshold) {
+        console.log(`COLLISION DETECTED with virus ${virus.id}! Distance: ${distance.toFixed(2)}`);
+        collision = true;
+        virusIdToRemove = virus.id;
+        break;
+      }
+    }
+    
+    // If collision detected, remove that virus and increment kill counter
+    if (collision && virusIdToRemove !== null) {
+      const updatedViruses = virusesRef.current.filter(v => v.id !== virusIdToRemove);
+      virusesRef.current = updatedViruses;
+      setViruses(prev => prev.filter(v => v.id !== virusIdToRemove));
+      setVirusesKilled(prev => prev + 1);
+      
+      // Check if all viruses are killed
+      if (updatedViruses.length === 0) {
+        console.log("All viruses killed! Game over!");
+        setGameActive(false);
+        return;
+      }
+      
+      // Add a replacement virus after a short delay (optional)
+      setTimeout(() => {
+        if (gameActive) {
+          addNewVirus();
+        }
+      }, 1000);
+    }
+  };
+  
+  // Reset the game to play again
+  const resetGame = () => {
+    if (!gameAreaRef.current) return;
+    
+    const gameWidth = gameAreaRef.current.clientWidth;
+    const gameHeight = gameAreaRef.current.clientHeight;
+    
+    // Reset with a single virus
+    const initialVirus = {
+      id: Date.now(),
+      pos: {
+        x: Math.random() < 0.5 ? 
+            Math.random() * gameWidth * 0.3 : 
+            gameWidth - (Math.random() * gameWidth * 0.3),
+        y: Math.random() < 0.5 ? 
+            Math.random() * gameHeight * 0.3 : 
+            gameHeight - (Math.random() * gameHeight * 0.3)
+      },
+      direction: { 
+        dx: (Math.random() - 0.5) * 2,
+        dy: (Math.random() - 0.5) * 2
+      },
+      size: virusSizeFactor.level1
+    };
+    
+    virusesRef.current = [initialVirus];
+    setViruses([{
+      id: initialVirus.id,
+      pos: initialVirus.pos,
+      size: virusSizeFactor.level1
+    }]);
+    
+    // Reset score, killed count, speed, level, and game won state
+    setScore(0);
+    setVirusesKilled(0);
+    setBaseSpeed(0.5);
+    setGameLevel(1);
+    setGameActive(true);
+    setGameWon(false);
+  };
+
+  // Get level-specific notification text
+  const getLevelNotificationText = () => {
+    switch (gameLevel) {
+      case 2: return "Level 2: Smaller Viruses!";
+      case 3: return "Level 3: Larger Viruses!"; // Updated text to reflect larger viruses
+      default: return "";
+    }
+  };
+
+  // Get level-specific instruction text
+  const getLevelInstructionText = () => {
+    if (!gameActive) {
+      if (gameWon) {
+        return "Congratulations! You've reached 2000 points and won the game!";
+      } else {
+        return "You've killed all the viruses! Tap Play Again to restart the game.";
+      }
+    }
+    
+    switch (gameLevel) {
+      case 1: return "Tap and drag in the game area to catch viruses. Level 2 starts at 500 points! Reach 2000 points to win!";
+      case 2: return "Level 2: Viruses are smaller and harder to catch! Level 3 starts at 1000 points! Reach 2000 points to win!";
+      case 3: return "Level 3: Viruses are larger and easier to catch! Reach 2000 points to win!"; // Updated instruction
+      default: return "Catch as many viruses as you can! Reach 2000 points to win!";
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-center justify-center w-full h-full">
+      <div className="mb-4 text-center">
+        <h1 className="text-xl md:text-2xl font-bold mb-2">Catch the Virus Game</h1>
+        <div className="flex justify-center gap-4">
+          <p className="text-base md:text-lg">Score: {score}</p>
+          <p className="text-base md:text-lg text-red-600 font-semibold">Viruses Killed: {virusesKilled}</p>
+          <p className="text-base md:text-lg text-purple-600 font-semibold">Level: {gameLevel}</p>
+        </div>
+        <p className="text-xs mt-1">Speed Level: {Math.round((baseSpeed - 0.5) * 10) + 1}</p>
+        
+        {!gameActive && (
+          <div className="mt-4">
+            <p className="text-lg md:text-xl font-bold text-red-500">
+              {gameWon ? "You Win!" : "Game Over!"}
+            </p>
+            <p className="text-sm mb-2">
+              {gameWon 
+                ? "You've reached 2000 points and completed the game!" 
+                : "You've killed all the viruses!"}
+            </p>
+            <button 
+              onClick={resetGame} 
+              className="mt-2 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 text-base"
+            >
+              Play Again
+            </button>
+          </div>
+        )}
+      </div>
+      
+      <div 
+        ref={gameAreaRef}
+        className="relative w-full border-2 border-gray-300 rounded-lg overflow-hidden touch-none"
+        style={{ 
+          maxWidth: "600px", 
+          height: "min(400px, 60vh)",
+          backgroundColor: "#B22222", // Dark red background for blood
+        }}
+      >
+        {/* Blood cells in the background */}
+        {bloodCells.map(cell => (
+          <div
+            key={cell.id}
+            className={`absolute rounded-full ${cell.type === 'red' ? 'bg-red-300' : 'bg-gray-100 border border-gray-300'}`}
+            style={{
+              left: `${cell.x}px`,
+              top: `${cell.y}px`,
+              width: `${cell.size}px`,
+              height: `${cell.size}px`,
+              opacity: cell.opacity,
+              transform: 'translate(-50%, -50%)',
+              zIndex: 1
+            }}
+          >
+            {cell.type === 'white' && (
+              <div className="w-full h-full flex items-center justify-center">
+                <div className="w-1/2 h-1/2 bg-gray-200 rounded-full"></div>
+              </div>
+            )}
+          </div>
+        ))}
+        
+        {/* Flow lines to enhance the bloodstream effect */}
+        <div className="absolute inset-0" style={{ zIndex: 2 }}>
+          {[...Array(15)].map((_, i) => (
+            <div 
+              key={`flow-${i}`}
+              className="absolute bg-red-700 opacity-20"
+              style={{
+                left: `${Math.random() * 100}%`,
+                top: '0',
+                width: `${Math.random() * 2 + 1}px`,
+                height: '100%',
+                transform: `rotate(${Math.random() * 10 - 5}deg)`,
+              }}
+            ></div>
+          ))}
+        </div>
+        
+        {/* Sperm */}
+        <div
+          className="absolute"
+          style={{
+            left: `${spermPos.x}px`,
+            top: `${spermPos.y}px`,
+            transform: 'translate(-50%, -50%)',
+            zIndex: 10
+          }}
+        >
+          <div className="relative">
+            <div className="bg-blue-400 w-6 h-6 rounded-full"></div>
+            <div 
+              className="absolute bg-blue-400 w-2 h-8 rounded-full"
+              style={{ left: '10px', top: '4px', transform: 'rotate(30deg)' }}
+            ></div>
+          </div>
+        </div>
+        
+        {/* Viruses */}
+        {viruses.map(virus => (
+          <div
+            key={virus.id}
+            className="absolute"
+            style={{
+              left: `${virus.pos.x}px`,
+              top: `${virus.pos.y}px`,
+              transform: 'translate(-50%, -50%)',
+              zIndex: 5
+            }}
+          >
+            <div className="relative">
+              <div 
+                className="bg-green-500 rounded-full flex items-center justify-center"
+                style={{
+                  width: `${20 * virus.size}px`,
+                  height: `${20 * virus.size}px`
+                }}
+              >
+                {/* Virus spikes */}
+                {[...Array(8)].map((_, i) => (
+                  <div 
+                    key={i}
+                    className="absolute bg-green-500 rounded-full"
+                    style={{ 
+                      width: `${2 * virus.size}px`,
+                      height: `${4 * virus.size}px`,
+                      transform: `rotate(${i * 45}deg) translateY(-${6 * virus.size}px)`,
+                      transformOrigin: 'center center',
+                    }}
+                  ></div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ))}
+        
+        {/* Game instructions overlay */}
+        <div className="absolute top-2 left-2 text-xs md:text-sm text-white bg-red-900 bg-opacity-70 p-1 rounded">
+          {isMobile ? 
+            "Touch and drag to control the blue sperm. Catch the green viruses!" :
+            "Move your cursor to control the blue sperm. Try to catch all the viruses!"}
+        </div>
+        
+        {/* Virus count display */}
+        <div className="absolute top-2 right-2 text-xs md:text-sm font-bold text-white bg-red-900 bg-opacity-70 p-1 rounded">
+          Active Viruses: {viruses.length}
+        </div>
+        
+        {/* Level notification */}
+        {gameLevel > 1 && (
+          <div className="absolute bottom-2 left-1/2 transform -translate-x-1/2 text-sm md:text-base font-bold text-white bg-red-900 bg-opacity-70 p-2 rounded animate-pulse">
+            {getLevelNotificationText()}
+          </div>
+        )}
+        
+        {/* Score to win notification */}
+        <div className="absolute bottom-2 right-2 text-xs md:text-sm font-bold text-white bg-red-900 bg-opacity-70 p-1 rounded">
+          Goal: 2000 pts
+        </div>
+      </div>
+      
+      {/* Mobile-friendly notice */}
+      <div className="mt-4 text-xs md:text-sm text-gray-600 text-center max-w-xs">
+        {getLevelInstructionText()}
+      </div>
+    </div>
+  );
+};
+
+export default CatchTheVirusGame;
